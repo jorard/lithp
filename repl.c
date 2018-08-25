@@ -37,7 +37,7 @@ typedef struct lval {
     struct lval** cell;
 } lval;
 
-enum { LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR };
+enum { LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_SEXPR, LVAL_QEXPR };
 
 /* forward declarations */
 void lval_print(lval* v);
@@ -79,6 +79,15 @@ lval* lval_sexpr(void) {
     return v;
 }
 
+lval* lval_qexpr(void) {
+    lval* v = malloc(sizeof(lval));
+    v->type = LVAL_QEXPR;
+    v->count = 0;
+    v->cell = NULL;
+
+    return v;
+}
+
 void lval_del(lval* v) {
     switch (v->type) {
         case LVAL_NUM:
@@ -90,6 +99,7 @@ void lval_del(lval* v) {
             free(v->sym);
             break;
         case LVAL_SEXPR:
+        case LVAL_QEXPR:
             for (int i = 0; i < v->count; i++) {
                 lval_del(v->cell[i]);
             }
@@ -118,22 +128,35 @@ lval* lval_read(mpc_ast_t* tree) {
         return lval_sym(tree->contents);
     }
 
-    lval* sexpr = lval_sexpr();
+    lval* expr;
+    if (strstr(tree->tag, "qexpr")) {
+        expr = lval_qexpr();
+    } else {
+        expr = lval_sexpr();
+    }
+
+    // lval* expr = strstr(tree->tag, "qexpr") != NULL
+        // ? lval_qexpr()
+        // : lval_sexpr();
+
     for (int i = 0; i < tree->children_num; i++) {
         char* contents = tree->children[i]->contents;
-        bool isParens = strcmp(contents, "(") == 0 || strcmp(contents, ")") == 0;
+        bool isParens = strcmp(contents, "(") == 0 
+                        || strcmp(contents, ")") == 0
+                        || strcmp(contents, "{") == 0
+                        || strcmp(contents, "}") == 0;
         bool isRegex = strcmp(tree->children[i]->tag, "regex") == 0;
 
         if (isParens || isRegex) {
             continue;
         }
 
-        sexpr->count++;
-        sexpr->cell = realloc(sexpr->cell, sizeof(lval*) * sexpr->count);
-        sexpr->cell[sexpr->count - 1] = lval_read(tree->children[i]);
+        expr->count++;
+        expr->cell = realloc(expr->cell, sizeof(lval*) * expr->count);
+        expr->cell[expr->count - 1] = lval_read(tree->children[i]);
     }
 
-    return sexpr;
+    return expr;
 }
 
 void lval_expr_print(lval* v, char open, char close) {
@@ -163,6 +186,9 @@ void lval_print(lval* v) {
             break;
         case LVAL_SEXPR:
             lval_expr_print(v, '(', ')');
+            break;
+        case LVAL_QEXPR:
+            lval_expr_print(v, '{', '}');
             break;
     }
 }
@@ -341,16 +367,20 @@ int main(int argc, char** argv) {
     mpc_parser_t* Number = mpc_new("number");
     mpc_parser_t* Symbol = mpc_new("symbol");
     mpc_parser_t* Sexpr = mpc_new("sexpr");
+    mpc_parser_t* Qexpr = mpc_new("qexpr");
     mpc_parser_t* Expr = mpc_new("expr");
     mpc_parser_t* Lithp = mpc_new("lithp");
 
     mpca_lang(MPCA_LANG_DEFAULT,"                                   \
         number      : /-?[0-9]+/ ;                                  \
-        symbol      : '+' | '-' | '*' | '/' ;                       \
+        symbol      : '+' | '-' | '*' | '/'                         \
+                    | \"list\" | \"head\" | \"tail\" |              \
+                    | \"join\" | \"eval\" ;                         \
         sexpr       : '(' <expr>* ')' ;                             \
-        expr        : <number> | <symbol> | <sexpr> ;               \
+        qexpr       : '{' <expr>* '}' ;                             \
+        expr        : <number> | <symbol> | <sexpr> | <qexpr> ;     \
         lithp       : /^/ <expr>* /$/ ;                             \
-    ", Number, Symbol, Sexpr, Expr, Lithp);
+    ", Number, Symbol, Sexpr, Qexpr, Expr, Lithp);
 
     while (1) {
         char* input = readline("lithp >> ");
@@ -374,7 +404,7 @@ int main(int argc, char** argv) {
         free(input);
     }
 
-    mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Lithp);
+    mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Lithp);
 
     return 0;
 }
